@@ -33,7 +33,7 @@ type ClientConnectionConfiguration struct {
 	// cps controls the number of queries per second allowed for this connection.
 	QPS float32
 	// burst allows extra queries to accumulate when a client is exceeding its rate.
-	Burst int
+	Burst int32
 }
 
 // SchedulerPolicyConfigMapKey defines the key of the element in the
@@ -87,7 +87,7 @@ type KubeSchedulerConfiguration struct {
 	// RequiredDuringScheduling affinity is not symmetric, but there is an implicit PreferredDuringScheduling affinity rule
 	// corresponding to every RequiredDuringScheduling affinity rule.
 	// HardPodAffinitySymmetricWeight represents the weight of implicit PreferredDuringScheduling affinity rule, in the range 0-100.
-	HardPodAffinitySymmetricWeight int
+	HardPodAffinitySymmetricWeight int32
 
 	// LeaderElection defines the configuration of leader election client.
 	LeaderElection KubeSchedulerLeaderElectionConfiguration
@@ -181,6 +181,9 @@ type KubeControllerManagerConfiguration struct {
 	CloudProvider string
 	// cloudConfigFile is the path to the cloud provider configuration file.
 	CloudConfigFile string
+	// externalCloudVolumePlugin specifies the plugin to use when cloudProvider is "external".
+	// It is currently used by the in repo cloud providers to handle node and volume control in the KCM.
+	ExternalCloudVolumePlugin string
 	// run with untagged cloud instances
 	AllowUntaggedCloud bool
 	// concurrentEndpointSyncs is the number of endpoint syncing operations

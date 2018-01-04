@@ -104,7 +104,14 @@ func (cache *schedulerCache) List(selector labels.Selector) ([]*v1.Pod, error) {
 func (cache *schedulerCache) FilteredList(podFilter PodFilter, selector labels.Selector) ([]*v1.Pod, error) {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
-	var pods []*v1.Pod
+	// podFilter is expected to return true for most or all of the pods. We
+	// can avoid expensive array growth without wasting too much memory by
+	// pre-allocating capacity.
+	maxSize := 0
+	for _, info := range cache.nodes {
+		maxSize += len(info.pods)
+	}
+	pods := make([]*v1.Pod, 0, maxSize)
 	for _, info := range cache.nodes {
 		for _, pod := range info.pods {
 			if podFilter(pod) && selector.Matches(labels.Set(pod.Labels)) {
@@ -439,7 +446,7 @@ func (cache *schedulerCache) cleanupAssumedPods(now time.Time) {
 			panic("Key found in assumed set but not in podStates. Potentially a logical error.")
 		}
 		if !ps.bindingFinished {
-			glog.Warningf("Couldn't expire cache for pod %v/%v. Binding is still in progress.",
+			glog.V(3).Infof("Couldn't expire cache for pod %v/%v. Binding is still in progress.",
 				ps.pod.Namespace, ps.pod.Name)
 			continue
 		}

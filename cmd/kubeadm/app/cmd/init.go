@@ -31,6 +31,7 @@ import (
 	flag "github.com/spf13/pflag"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	clientset "k8s.io/client-go/kubernetes"
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 	kubeadmapiext "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/v1alpha1"
@@ -47,6 +48,7 @@ import (
 	controlplanephase "k8s.io/kubernetes/cmd/kubeadm/app/phases/controlplane"
 	etcdphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/etcd"
 	kubeconfigphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/kubeconfig"
+	kubeletphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/kubelet"
 	markmasterphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/markmaster"
 	selfhostingphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/selfhosting"
 	uploadconfigphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/uploadconfig"
@@ -58,7 +60,6 @@ import (
 	kubeconfigutil "k8s.io/kubernetes/cmd/kubeadm/app/util/kubeconfig"
 	"k8s.io/kubernetes/cmd/kubeadm/app/util/pubkeypin"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
-	"k8s.io/kubernetes/pkg/util/version"
 	utilsexec "k8s.io/utils/exec"
 )
 
@@ -112,6 +113,7 @@ func NewCmdInit(out io.Writer) *cobra.Command {
 	var dryRun bool
 	var featureGatesString string
 	var criSocket string
+	var ignorePreflightErrors []string
 
 	cmd := &cobra.Command{
 		Use:   "init",
@@ -126,7 +128,10 @@ func NewCmdInit(out io.Writer) *cobra.Command {
 			internalcfg := &kubeadmapi.MasterConfiguration{}
 			legacyscheme.Scheme.Convert(cfg, internalcfg, nil)
 
-			i, err := NewInit(cfgPath, internalcfg, skipPreFlight, skipTokenPrint, dryRun, criSocket)
+			ignorePreflightErrorsSet, err := validation.ValidateIgnorePreflightErrors(ignorePreflightErrors, skipPreFlight)
+			kubeadmutil.CheckErr(err)
+
+			i, err := NewInit(cfgPath, internalcfg, ignorePreflightErrorsSet, skipTokenPrint, dryRun, criSocket)
 			kubeadmutil.CheckErr(err)
 			kubeadmutil.CheckErr(i.Validate(cmd))
 			kubeadmutil.CheckErr(i.Run(out))
@@ -134,7 +139,7 @@ func NewCmdInit(out io.Writer) *cobra.Command {
 	}
 
 	AddInitConfigFlags(cmd.PersistentFlags(), cfg, &featureGatesString)
-	AddInitOtherFlags(cmd.PersistentFlags(), &cfgPath, &skipPreFlight, &skipTokenPrint, &dryRun, &criSocket)
+	AddInitOtherFlags(cmd.PersistentFlags(), &cfgPath, &skipPreFlight, &skipTokenPrint, &dryRun, &criSocket, &ignorePreflightErrors)
 
 	return cmd
 }
@@ -190,16 +195,21 @@ func AddInitConfigFlags(flagSet *flag.FlagSet, cfg *kubeadmapiext.MasterConfigur
 }
 
 // AddInitOtherFlags adds init flags that are not bound to a configuration file to the given flagset
-func AddInitOtherFlags(flagSet *flag.FlagSet, cfgPath *string, skipPreFlight, skipTokenPrint, dryRun *bool, criSocket *string) {
+func AddInitOtherFlags(flagSet *flag.FlagSet, cfgPath *string, skipPreFlight, skipTokenPrint, dryRun *bool, criSocket *string, ignorePreflightErrors *[]string) {
 	flagSet.StringVar(
 		cfgPath, "config", *cfgPath,
 		"Path to kubeadm config file. WARNING: Usage of a configuration file is experimental.",
+	)
+	flagSet.StringSliceVar(
+		ignorePreflightErrors, "ignore-preflight-errors", *ignorePreflightErrors,
+		"A list of checks whose errors will be shown as warnings. Example: 'IsPrivilegedUser,Swap'. Value 'all' ignores errors from all checks.",
 	)
 	// Note: All flags that are not bound to the cfg object should be whitelisted in cmd/kubeadm/app/apis/kubeadm/validation/validation.go
 	flagSet.BoolVar(
 		skipPreFlight, "skip-preflight-checks", *skipPreFlight,
 		"Skip preflight checks which normally run before modifying the system.",
 	)
+	flagSet.MarkDeprecated("skip-preflight-checks", "it is now equivalent to --ignore-preflight-errors=all")
 	// Note: All flags that are not bound to the cfg object should be whitelisted in cmd/kubeadm/app/apis/kubeadm/validation/validation.go
 	flagSet.BoolVar(
 		skipTokenPrint, "skip-token-print", *skipTokenPrint,
@@ -217,9 +227,7 @@ func AddInitOtherFlags(flagSet *flag.FlagSet, cfgPath *string, skipPreFlight, sk
 }
 
 // NewInit validates given arguments and instantiates Init struct with provided information.
-func NewInit(cfgPath string, cfg *kubeadmapi.MasterConfiguration, skipPreFlight, skipTokenPrint, dryRun bool, criSocket string) (*Init, error) {
-
-	fmt.Println("[kubeadm] WARNING: kubeadm is in beta. Please do not use it for production clusters!")
+func NewInit(cfgPath string, cfg *kubeadmapi.MasterConfiguration, ignorePreflightErrors sets.String, skipTokenPrint, dryRun bool, criSocket string) (*Init, error) {
 
 	if cfgPath != "" {
 		b, err := ioutil.ReadFile(cfgPath)
@@ -250,18 +258,14 @@ func NewInit(cfgPath string, cfg *kubeadmapi.MasterConfiguration, skipPreFlight,
 		fmt.Println("\t(/etc/systemd/system/kubelet.service.d/10-kubeadm.conf should be edited for this purpose)")
 	}
 
-	if !skipPreFlight {
-		fmt.Println("[preflight] Running pre-flight checks.")
+	fmt.Println("[preflight] Running pre-flight checks.")
 
-		if err := preflight.RunInitMasterChecks(utilsexec.New(), cfg, criSocket); err != nil {
-			return nil, err
-		}
-
-		// Try to start the kubelet service in case it's inactive
-		preflight.TryStartKubelet()
-	} else {
-		fmt.Println("[preflight] Skipping pre-flight checks.")
+	if err := preflight.RunInitMasterChecks(utilsexec.New(), cfg, criSocket, ignorePreflightErrors); err != nil {
+		return nil, err
 	}
+
+	// Try to start the kubelet service in case it's inactive
+	preflight.TryStartKubelet(ignorePreflightErrors)
 
 	return &Init{cfg: cfg, skipTokenPrint: skipTokenPrint, dryRun: dryRun}, nil
 }
@@ -283,12 +287,6 @@ func (i *Init) Validate(cmd *cobra.Command) error {
 
 // Run executes master node provisioning, including certificates, needed static pod manifests, etc.
 func (i *Init) Run(out io.Writer) error {
-
-	k8sVersion, err := version.ParseSemantic(i.cfg.KubernetesVersion)
-	if err != nil {
-		return fmt.Errorf("could not parse Kubernetes version %q: %v", i.cfg.KubernetesVersion, err)
-	}
-
 	// Get directories to write files to; can be faked if we're dry-running
 	realCertsDir := i.cfg.CertificatesDir
 	certsDirToWriteTo, kubeConfigDir, manifestDir, err := getDirectoriesToUse(i.dryRun, i.cfg.CertificatesDir)
@@ -339,6 +337,14 @@ func (i *Init) Run(out io.Writer) error {
 		return fmt.Errorf("error printing files on dryrun: %v", err)
 	}
 
+	// NOTE: flag "--dynamic-config-dir" should be specified in /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+	if features.Enabled(i.cfg.FeatureGates, features.DynamicKubeletConfig) {
+		// Write base kubelet configuration for dynamic kubelet configuration feature.
+		if err := kubeletphase.WriteInitKubeletConfigToDiskOnMaster(i.cfg); err != nil {
+			return fmt.Errorf("error writing base kubelet configuration to disk: %v", err)
+		}
+	}
+
 	// Create a kubernetes client and wait for the API server to be healthy (if not dryrunning)
 	client, err := createClient(i.cfg, i.dryRun)
 	if err != nil {
@@ -359,6 +365,14 @@ func (i *Init) Run(out io.Writer) error {
 		kubeletFailTempl.Execute(out, ctx)
 
 		return fmt.Errorf("couldn't initialize a Kubernetes cluster")
+	}
+
+	// NOTE: flag "--dynamic-config-dir" should be specified in /etc/systemd/system/kubelet.service.d/10-kubeadm.conf
+	if features.Enabled(i.cfg.FeatureGates, features.DynamicKubeletConfig) {
+		// Create base kubelet configuration for dynamic kubelet configuration feature.
+		if err := kubeletphase.CreateBaseKubeletConfiguration(i.cfg, client); err != nil {
+			return fmt.Errorf("error creating base kubelet configuration: %v", err)
+		}
 	}
 
 	// Upload currently used configuration to the cluster
@@ -384,16 +398,16 @@ func (i *Init) Run(out io.Writer) error {
 		return fmt.Errorf("error updating or creating token: %v", err)
 	}
 	// Create RBAC rules that makes the bootstrap tokens able to post CSRs
-	if err := nodebootstraptokenphase.AllowBootstrapTokensToPostCSRs(client, k8sVersion); err != nil {
+	if err := nodebootstraptokenphase.AllowBootstrapTokensToPostCSRs(client); err != nil {
 		return fmt.Errorf("error allowing bootstrap tokens to post CSRs: %v", err)
 	}
 	// Create RBAC rules that makes the bootstrap tokens able to get their CSRs approved automatically
-	if err := nodebootstraptokenphase.AutoApproveNodeBootstrapTokens(client, k8sVersion); err != nil {
+	if err := nodebootstraptokenphase.AutoApproveNodeBootstrapTokens(client); err != nil {
 		return fmt.Errorf("error auto-approving node bootstrap tokens: %v", err)
 	}
 
 	// Create/update RBAC rules that makes the nodes to rotate certificates and get their CSRs approved automatically
-	if err := nodebootstraptokenphase.AutoApproveNodeCertificateRotation(client, k8sVersion); err != nil {
+	if err := nodebootstraptokenphase.AutoApproveNodeCertificateRotation(client); err != nil {
 		return err
 	}
 
@@ -418,7 +432,7 @@ func (i *Init) Run(out io.Writer) error {
 		// Temporary control plane is up, now we create our self hosted control
 		// plane components and remove the static manifests:
 		fmt.Println("[self-hosted] Creating self-hosted control plane.")
-		if err := selfhostingphase.CreateSelfHostedControlPlane(manifestDir, kubeConfigDir, i.cfg, client, waiter); err != nil {
+		if err := selfhostingphase.CreateSelfHostedControlPlane(manifestDir, kubeConfigDir, i.cfg, client, waiter, i.dryRun); err != nil {
 			return fmt.Errorf("error creating self hosted control plane: %v", err)
 		}
 	}

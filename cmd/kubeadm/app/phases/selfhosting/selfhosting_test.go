@@ -23,7 +23,7 @@ import (
 	"os"
 	"testing"
 
-	apps "k8s.io/api/apps/v1beta2"
+	apps "k8s.io/api/apps/v1"
 	"k8s.io/kubernetes/cmd/kubeadm/app/constants"
 	"k8s.io/kubernetes/cmd/kubeadm/app/util"
 	volumeutil "k8s.io/kubernetes/pkg/volume/util"
@@ -104,7 +104,7 @@ spec:
 status: {}
 `
 
-	testAPIServerDaemonSet = `apiVersion: apps/v1beta2
+	testAPIServerDaemonSet = `apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   creationTimestamp: null
@@ -113,6 +113,9 @@ metadata:
   name: self-hosted-kube-apiserver
   namespace: kube-system
 spec:
+  selector:
+    matchLabels:
+      k8s-app: self-hosted-kube-apiserver
   template:
     metadata:
       creationTimestamp: null
@@ -262,7 +265,7 @@ spec:
 status: {}
 `
 
-	testControllerManagerDaemonSet = `apiVersion: apps/v1beta2
+	testControllerManagerDaemonSet = `apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   creationTimestamp: null
@@ -271,6 +274,9 @@ metadata:
   name: self-hosted-kube-controller-manager
   namespace: kube-system
 spec:
+  selector:
+    matchLabels:
+      k8s-app: self-hosted-kube-controller-manager
   template:
     metadata:
       creationTimestamp: null
@@ -389,7 +395,7 @@ spec:
 status: {}
 `
 
-	testSchedulerDaemonSet = `apiVersion: apps/v1beta2
+	testSchedulerDaemonSet = `apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   creationTimestamp: null
@@ -398,6 +404,9 @@ metadata:
   name: self-hosted-kube-scheduler
   namespace: kube-system
 spec:
+  selector:
+    matchLabels:
+      k8s-app: self-hosted-kube-scheduler
   template:
     metadata:
       creationTimestamp: null

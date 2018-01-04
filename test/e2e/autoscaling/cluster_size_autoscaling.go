@@ -415,6 +415,15 @@ var _ = SIGDescribe("Cluster size autoscaling [Slow]", func() {
 			}
 		}
 
+		if minSize == 0 {
+			newSizes := make(map[string]int)
+			for mig, size := range originalSizes {
+				newSizes[mig] = size
+			}
+			newSizes[minMig] = 1
+			setMigSizes(newSizes)
+		}
+
 		removeLabels := func(nodesToClean sets.String) {
 			By("Removing labels from nodes")
 			for node := range nodesToClean {
@@ -866,6 +875,8 @@ var _ = SIGDescribe("Cluster size autoscaling [Slow]", func() {
 	})
 
 	It("shouldn't scale up when expendable pod is created [Feature:ClusterSizeAutoscalingScaleUp]", func() {
+		// TODO(krzysztof_jastrzebski): Start running this test on GKE when Pod Priority and Preemption is in beta.
+		framework.SkipUnlessProviderIs("gce")
 		defer createPriorityClasses(f)()
 		// Create nodesCountAfterResize+1 pods allocating 0.7 allocatable on present nodes. One more node will have to be created.
 		cleanupFunc := ReserveMemoryWithPriority(f, "memory-reservation", nodeCount+1, int(float64(nodeCount+1)*float64(0.7)*float64(memAllocatableMb)), false, time.Second, expendablePriorityClassName)
@@ -878,6 +889,8 @@ var _ = SIGDescribe("Cluster size autoscaling [Slow]", func() {
 	})
 
 	It("should scale up when non expendable pod is created [Feature:ClusterSizeAutoscalingScaleUp]", func() {
+		// TODO(krzysztof_jastrzebski): Start running this test on GKE when Pod Priority and Preemption is in beta.
+		framework.SkipUnlessProviderIs("gce")
 		defer createPriorityClasses(f)()
 		// Create nodesCountAfterResize+1 pods allocating 0.7 allocatable on present nodes. One more node will have to be created.
 		cleanupFunc := ReserveMemoryWithPriority(f, "memory-reservation", nodeCount+1, int(float64(nodeCount+1)*float64(0.7)*float64(memAllocatableMb)), true, scaleUpTimeout, highPriorityClassName)
@@ -888,6 +901,8 @@ var _ = SIGDescribe("Cluster size autoscaling [Slow]", func() {
 	})
 
 	It("shouldn't scale up when expendable pod is preempted [Feature:ClusterSizeAutoscalingScaleUp]", func() {
+		// TODO(krzysztof_jastrzebski): Start running this test on GKE when Pod Priority and Preemption is in beta.
+		framework.SkipUnlessProviderIs("gce")
 		defer createPriorityClasses(f)()
 		// Create nodesCountAfterResize pods allocating 0.7 allocatable on present nodes - one pod per node.
 		cleanupFunc1 := ReserveMemoryWithPriority(f, "memory-reservation1", nodeCount, int(float64(nodeCount)*float64(0.7)*float64(memAllocatableMb)), true, defaultTimeout, expendablePriorityClassName)
@@ -900,6 +915,8 @@ var _ = SIGDescribe("Cluster size autoscaling [Slow]", func() {
 	})
 
 	It("should scale down when expendable pod is running [Feature:ClusterSizeAutoscalingScaleDown]", func() {
+		// TODO(krzysztof_jastrzebski): Start running this test on GKE when Pod Priority and Preemption is in beta.
+		framework.SkipUnlessProviderIs("gce")
 		defer createPriorityClasses(f)()
 		increasedSize := manuallyIncreaseClusterSize(f, originalSizes)
 		// Create increasedSize pods allocating 0.7 allocatable on present nodes - one pod per node.
@@ -910,7 +927,9 @@ var _ = SIGDescribe("Cluster size autoscaling [Slow]", func() {
 			func(size int) bool { return size == nodeCount }, scaleDownTimeout))
 	})
 
-	It("shouldn't scale down when non expendable pod is running [Feature:ClusterSizeAutoscalingScalePriority]", func() {
+	It("shouldn't scale down when non expendable pod is running [Feature:ClusterSizeAutoscalingScaleDown]", func() {
+		// TODO(krzysztof_jastrzebski): Start running this test on GKE when Pod Priority and Preemption is in beta.
+		framework.SkipUnlessProviderIs("gce")
 		defer createPriorityClasses(f)()
 		increasedSize := manuallyIncreaseClusterSize(f, originalSizes)
 		// Create increasedSize pods allocating 0.7 allocatable on present nodes - one pod per node.
@@ -954,10 +973,10 @@ func runDrainTest(f *framework.Framework, migSizes map[string]int, namespace str
 			MinAvailable: &minAvailable,
 		},
 	}
-	_, err = f.ClientSet.Policy().PodDisruptionBudgets(namespace).Create(pdb)
+	_, err = f.ClientSet.PolicyV1beta1().PodDisruptionBudgets(namespace).Create(pdb)
 
 	defer func() {
-		f.ClientSet.Policy().PodDisruptionBudgets(namespace).Delete(pdb.Name, &metav1.DeleteOptions{})
+		f.ClientSet.PolicyV1beta1().PodDisruptionBudgets(namespace).Delete(pdb.Name, &metav1.DeleteOptions{})
 	}()
 
 	framework.ExpectNoError(err)
@@ -977,10 +996,18 @@ func getGKEURL(apiVersion string, suffix string) string {
 }
 
 func getGKEClusterURL(apiVersion string) string {
-	return getGKEURL(apiVersion, fmt.Sprintf("projects/%s/zones/%s/clusters/%s",
-		framework.TestContext.CloudConfig.ProjectID,
-		framework.TestContext.CloudConfig.Zone,
-		framework.TestContext.CloudConfig.Cluster))
+	if isRegionalCluster() {
+		// TODO(bskiba): Use locations API for all clusters once it's graduated to v1.
+		return getGKEURL(apiVersion, fmt.Sprintf("projects/%s/locations/%s/clusters/%s",
+			framework.TestContext.CloudConfig.ProjectID,
+			framework.TestContext.CloudConfig.Region,
+			framework.TestContext.CloudConfig.Cluster))
+	} else {
+		return getGKEURL(apiVersion, fmt.Sprintf("projects/%s/zones/%s/clusters/%s",
+			framework.TestContext.CloudConfig.ProjectID,
+			framework.TestContext.CloudConfig.Zone,
+			framework.TestContext.CloudConfig.Cluster))
+	}
 }
 
 func getCluster(apiVersion string) (string, error) {
@@ -1001,7 +1028,11 @@ func getCluster(apiVersion string) (string, error) {
 }
 
 func isAutoscalerEnabled(expectedMaxNodeCountInTargetPool int) (bool, error) {
-	strBody, err := getCluster("v1")
+	apiVersion := "v1"
+	if isRegionalCluster() {
+		apiVersion = "v1beta1"
+	}
+	strBody, err := getCluster(apiVersion)
 	if err != nil {
 		return false, err
 	}
@@ -1011,16 +1042,43 @@ func isAutoscalerEnabled(expectedMaxNodeCountInTargetPool int) (bool, error) {
 	return false, nil
 }
 
+func getClusterLocation() string {
+	if isRegionalCluster() {
+		return "--region=" + framework.TestContext.CloudConfig.Region
+	} else {
+		return "--zone=" + framework.TestContext.CloudConfig.Zone
+	}
+}
+
+func getGcloudCommand(commandTrack string, args []string) []string {
+	command := []string{"gcloud"}
+	if commandTrack == "beta" || commandTrack == "alpha" {
+		command = append(command, commandTrack)
+	}
+	command = append(command, args...)
+	command = append(command, getClusterLocation())
+	command = append(command, "--project="+framework.TestContext.CloudConfig.ProjectID)
+	return command
+}
+
+func isRegionalCluster() bool {
+	// TODO(bskiba): Use an appropriate indicator that the cluster is regional.
+	return framework.TestContext.CloudConfig.MultiZone
+}
+
 func enableAutoscaler(nodePool string, minCount, maxCount int) error {
 	glog.Infof("Using gcloud to enable autoscaling for pool %s", nodePool)
 
-	output, err := execCmd("gcloud", "container", "clusters", "update", framework.TestContext.CloudConfig.Cluster,
+	args := []string{"container", "clusters", "update", framework.TestContext.CloudConfig.Cluster,
 		"--enable-autoscaling",
-		"--min-nodes="+strconv.Itoa(minCount),
-		"--max-nodes="+strconv.Itoa(maxCount),
-		"--node-pool="+nodePool,
-		"--project="+framework.TestContext.CloudConfig.ProjectID,
-		"--zone="+framework.TestContext.CloudConfig.Zone).CombinedOutput()
+		"--min-nodes=" + strconv.Itoa(minCount),
+		"--max-nodes=" + strconv.Itoa(maxCount),
+		"--node-pool=" + nodePool}
+	track := ""
+	if isRegionalCluster() {
+		track = "beta"
+	}
+	output, err := execCmd(getGcloudCommand(track, args)...).CombinedOutput()
 
 	if err != nil {
 		glog.Errorf("Failed config update result: %s", output)
@@ -1041,12 +1099,14 @@ func enableAutoscaler(nodePool string, minCount, maxCount int) error {
 
 func disableAutoscaler(nodePool string, minCount, maxCount int) error {
 	glog.Infof("Using gcloud to disable autoscaling for pool %s", nodePool)
-
-	output, err := execCmd("gcloud", "container", "clusters", "update", framework.TestContext.CloudConfig.Cluster,
+	args := []string{"container", "clusters", "update", framework.TestContext.CloudConfig.Cluster,
 		"--no-enable-autoscaling",
-		"--node-pool="+nodePool,
-		"--project="+framework.TestContext.CloudConfig.ProjectID,
-		"--zone="+framework.TestContext.CloudConfig.Zone).CombinedOutput()
+		"--node-pool=" + nodePool}
+	track := ""
+	if isRegionalCluster() {
+		track = "beta"
+	}
+	output, err := execCmd(getGcloudCommand(track, args)...).CombinedOutput()
 
 	if err != nil {
 		glog.Errorf("Failed config update result: %s", output)
@@ -1218,22 +1278,20 @@ func waitTillAllNAPNodePoolsAreRemoved() error {
 }
 
 func addNodePool(name string, machineType string, numNodes int) {
-	output, err := execCmd("gcloud", "alpha", "container", "node-pools", "create", name, "--quiet",
-		"--machine-type="+machineType,
-		"--num-nodes="+strconv.Itoa(numNodes),
-		"--project="+framework.TestContext.CloudConfig.ProjectID,
-		"--zone="+framework.TestContext.CloudConfig.Zone,
-		"--cluster="+framework.TestContext.CloudConfig.Cluster).CombinedOutput()
+	args := []string{"container", "node-pools", "create", name, "--quiet",
+		"--machine-type=" + machineType,
+		"--num-nodes=" + strconv.Itoa(numNodes),
+		"--cluster=" + framework.TestContext.CloudConfig.Cluster}
+	output, err := execCmd(getGcloudCommand("alpha", args)...).CombinedOutput()
 	glog.Infof("Creating node-pool %s: %s", name, output)
 	framework.ExpectNoError(err)
 }
 
 func deleteNodePool(name string) {
 	glog.Infof("Deleting node pool %s", name)
-	output, err := execCmd("gcloud", "alpha", "container", "node-pools", "delete", name, "--quiet",
-		"--project="+framework.TestContext.CloudConfig.ProjectID,
-		"--zone="+framework.TestContext.CloudConfig.Zone,
-		"--cluster="+framework.TestContext.CloudConfig.Cluster).CombinedOutput()
+	args := []string{"container", "node-pools", "delete", name, "--quiet",
+		"--cluster=" + framework.TestContext.CloudConfig.Cluster}
+	output, err := execCmd(getGcloudCommand("alpha", args)...).CombinedOutput()
 	if err != nil {
 		glog.Infof("Error: %v", err)
 	}
@@ -1855,7 +1913,7 @@ func addKubeSystemPdbs(f *framework.Framework) (func(), error) {
 		var finalErr error
 		for _, newPdbName := range newPdbs {
 			By(fmt.Sprintf("Delete PodDisruptionBudget %v", newPdbName))
-			err := f.ClientSet.Policy().PodDisruptionBudgets("kube-system").Delete(newPdbName, &metav1.DeleteOptions{})
+			err := f.ClientSet.PolicyV1beta1().PodDisruptionBudgets("kube-system").Delete(newPdbName, &metav1.DeleteOptions{})
 			if err != nil {
 				// log error, but attempt to remove other pdbs
 				glog.Errorf("Failed to delete PodDisruptionBudget %v, err: %v", newPdbName, err)
@@ -1893,7 +1951,7 @@ func addKubeSystemPdbs(f *framework.Framework) (func(), error) {
 				MinAvailable: &minAvailable,
 			},
 		}
-		_, err := f.ClientSet.Policy().PodDisruptionBudgets("kube-system").Create(pdb)
+		_, err := f.ClientSet.PolicyV1beta1().PodDisruptionBudgets("kube-system").Create(pdb)
 		newPdbs = append(newPdbs, pdbName)
 
 		if err != nil {

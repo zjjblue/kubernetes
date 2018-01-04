@@ -59,10 +59,10 @@ for gv in "${GROUP_VERSIONS[@]}"; do
 	# collect internal groups
 	int_group="${pkg_dir%/*}/"
 	if [[ "${pkg_dir}" = core/* ]]; then
-	    int_group="api/"
+	  int_group="api/"
 	fi
     if ! [[ " ${INTERNAL_DIRS[@]:-} " =~ " ${int_group} " ]]; then
-        INTERNAL_DIRS+=("${int_group}")
+      INTERNAL_DIRS+=("${int_group}")
     fi
 done
 # delimit by commas for the command
@@ -72,7 +72,7 @@ INTERNAL_DIRS_CSV=$(IFS=',';echo "${INTERNAL_DIRS[*]// /,}";IFS=$)
 # This can be called with one flag, --verify-only, so it works for both the
 # update- and verify- scripts.
 ${clientgen} --input-base="k8s.io/kubernetes/pkg/apis" --input="${INTERNAL_DIRS_CSV}" "$@"
-${clientgen} --output-base "${KUBE_ROOT}/vendor" --clientset-path="k8s.io/client-go" --clientset-name="kubernetes" --input-base="k8s.io/kubernetes/vendor/k8s.io/api" --input="${GV_DIRS_CSV}" "$@"
+${clientgen} --output-base "${KUBE_ROOT}/vendor" --output-package="k8s.io/client-go" --clientset-name="kubernetes" --input-base="k8s.io/kubernetes/vendor/k8s.io/api" --input="${GV_DIRS_CSV}" "$@"
 
 listergen_internal_apis=(
 $(
@@ -87,8 +87,7 @@ ${listergen} --input-dirs "${listergen_internal_apis_csv}" "$@"
 listergen_external_apis=(
 $(
   cd ${KUBE_ROOT}/staging/src
-  # because client-gen doesn't do policy/v1alpha1, we have to skip it too
-  find k8s.io/api -name types.go | xargs -n1 dirname | sort | grep -v pkg.apis.policy.v1alpha1
+  find k8s.io/api -name types.go | xargs -n1 dirname | sort
 )
 )
 listergen_external_apis_csv=$(IFS=,; echo "${listergen_external_apis[*]}")

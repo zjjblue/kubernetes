@@ -30,12 +30,18 @@ REGIONAL_KUBE_ADDONS=${REGIONAL_KUBE_ADDONS:-true}
 NODE_SIZE=${NODE_SIZE:-n1-standard-2}
 NUM_NODES=${NUM_NODES:-3}
 MASTER_SIZE=${MASTER_SIZE:-n1-standard-$(get-master-size)}
+MASTER_MIN_CPU_ARCHITECTURE=${MASTER_MIN_CPU_ARCHITECTURE:-} # To allow choosing better architectures.
 MASTER_DISK_TYPE=pd-ssd
 MASTER_DISK_SIZE=${MASTER_DISK_SIZE:-$(get-master-disk-size)}
 MASTER_ROOT_DISK_SIZE=${MASTER_ROOT_DISK_SIZE:-$(get-master-root-disk-size)}
 NODE_DISK_TYPE=${NODE_DISK_TYPE:-pd-standard}
 NODE_DISK_SIZE=${NODE_DISK_SIZE:-100GB}
 NODE_LOCAL_SSDS=${NODE_LOCAL_SSDS:-0}
+# An extension to local SSDs allowing users to specify block/fs and SCSI/NVMe devices
+# Format of this variable will be "#,scsi/nvme,block/fs" you can specify multiple
+# configurations by seperating them by a semi-colon ex. "2,scsi,fs;1,nvme,block"
+# is a request for 2 SCSI formatted and mounted SSDs and 1 NVMe block device SSD.
+NODE_LOCAL_SSDS_EXT=${NODE_LOCAL_SSDS_EXT:-}
 # Accelerators to be attached to each node. Format "type=<accelerator-type>,count=<accelerator-count>"
 # More information on available GPUs here - https://cloud.google.com/compute/docs/gpus/
 NODE_ACCELERATORS=${NODE_ACCELERATORS:-""}
@@ -74,7 +80,7 @@ fi
 # Also please update corresponding image for node e2e at:
 # https://github.com/kubernetes/kubernetes/blob/master/test/e2e_node/jenkins/image-config.yaml
 CVM_VERSION=${CVM_VERSION:-container-vm-v20170627}
-GCI_VERSION=${KUBE_GCI_VERSION:-cos-stable-60-9592-90-0}
+GCI_VERSION=${KUBE_GCI_VERSION:-cos-stable-63-10032-71-0}
 MASTER_IMAGE=${KUBE_GCE_MASTER_IMAGE:-}
 MASTER_IMAGE_PROJECT=${KUBE_GCE_MASTER_PROJECT:-cos-cloud}
 NODE_IMAGE=${KUBE_GCE_NODE_IMAGE:-${GCI_VERSION}}
@@ -115,6 +121,8 @@ MASTER_IP_RANGE="${MASTER_IP_RANGE:-10.246.0.0/24}"
 # It is the primary range in the subnet and is the range used for node instance IPs.
 NODE_IP_RANGE="$(get-node-ip-range)"
 
+# NOTE: Avoid giving nodes empty scopes, because kubelet needs a service account
+# in order to initialize properly.
 NODE_SCOPES="${NODE_SCOPES:-monitoring,logging-write,storage-ro}"
 
 # Extra docker options for nodes.
@@ -144,6 +152,16 @@ ENABLE_CLUSTER_MONITORING="${KUBE_ENABLE_CLUSTER_MONITORING:-influxdb}"
 # this in case of stability issues.
 # TODO(piosz) remove this option once Metrics Server became a stable thing.
 ENABLE_METRICS_SERVER="${KUBE_ENABLE_METRICS_SERVER:-true}"
+
+# Optional: Metadata agent to setup as part of the cluster bring up:
+#   none        - No metadata agent
+#   stackdriver - Stackdriver metadata agent
+# Metadata agent is a daemon set that provides metadata of kubernetes objects
+# running on the same node for exporting metrics and logs.
+ENABLE_METADATA_AGENT="${KUBE_ENABLE_METADATA_AGENT:-none}"
+
+# Version tag of metadata agent
+METADATA_AGENT_VERSION="${KUBE_METADATA_AGENT_VERSION:-0.2-0.0.13-5-watch}"
 
 # One special node out of NUM_NODES would be created of this type if specified.
 # Useful for scheduling heapster in large clusters with nodes of small size.
@@ -197,10 +215,15 @@ RUNTIME_CONFIG="${KUBE_RUNTIME_CONFIG:-}"
 FEATURE_GATES="${KUBE_FEATURE_GATES:-ExperimentalCriticalPodAnnotation=true}"
 
 if [[ ! -z "${NODE_ACCELERATORS}" ]]; then
-    FEATURE_GATES="${FEATURE_GATES},Accelerators=true"
+    FEATURE_GATES="${FEATURE_GATES},DevicePlugins=true"
+    if [[ "${NODE_ACCELERATORS}" =~ .*type=([a-zA-Z0-9-]+).* ]]; then
+        NODE_LABELS="${NODE_LABELS},cloud.google.com/gke-accelerator=${BASH_REMATCH[1]}"
+    fi
 fi
 
 # Optional: Install cluster DNS.
+# Set CLUSTER_DNS_CORE_DNS to 'true' to install CoreDNS instead of kube-dns.
+CLUSTER_DNS_CORE_DNS="${CLUSTER_DNS_CORE_DNS:-false}"
 ENABLE_CLUSTER_DNS="${KUBE_ENABLE_CLUSTER_DNS:-true}"
 DNS_SERVER_IP="${KUBE_DNS_SERVER_IP:-10.0.0.10}"
 DNS_DOMAIN="${KUBE_DNS_DOMAIN:-cluster.local}"
@@ -270,18 +293,13 @@ if [[ -n "${DISABLE_DOCKER_LIVE_RESTORE:-}" ]]; then
   PROVIDER_VARS="${PROVIDER_VARS:-} DISABLE_DOCKER_LIVE_RESTORE"
 fi
 
-# Override default docker storage driver.
-if [[ -n "${DOCKER_STORAGE_DRIVER:-}" ]]; then
-  PROVIDER_VARS="${PROVIDER_VARS:-} DOCKER_STORAGE_DRIVER"
-fi
-
 # Override default GLBC image
 if [[ -n "${GCE_GLBC_IMAGE:-}" ]]; then
   PROVIDER_VARS="${PROVIDER_VARS:-} GCE_GLBC_IMAGE"
 fi
 
 # Admission Controllers to invoke prior to persisting objects in cluster
-ADMISSION_CONTROL=Initializers,NamespaceLifecycle,LimitRanger,ServiceAccount,PersistentVolumeLabel,DefaultStorageClass,DefaultTolerationSeconds,NodeRestriction,Priority
+ADMISSION_CONTROL=Initializers,NamespaceLifecycle,LimitRanger,ServiceAccount,PersistentVolumeLabel,DefaultStorageClass,PersistentVolumeClaimResize,DefaultTolerationSeconds,NodeRestriction,Priority,PVCProtection
 
 if [[ "${ENABLE_POD_SECURITY_POLICY:-}" == "true" ]]; then
   ADMISSION_CONTROL="${ADMISSION_CONTROL},PodSecurityPolicy"

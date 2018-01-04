@@ -12,8 +12,8 @@ go_test(
         "controller_ref_manager_test.go",
         "controller_utils_test.go",
     ],
+    embed = [":go_default_library"],
     importpath = "k8s.io/kubernetes/pkg/controller",
-    library = ":go_default_library",
     deps = [
         "//pkg/api/legacyscheme:go_default_library",
         "//pkg/api/testapi:go_default_library",
@@ -107,6 +107,7 @@ filegroup(
         "//pkg/controller/bootstrap:all-srcs",
         "//pkg/controller/certificates:all-srcs",
         "//pkg/controller/cloud:all-srcs",
+        "//pkg/controller/clusterroleaggregation:all-srcs",
         "//pkg/controller/cronjob:all-srcs",
         "//pkg/controller/daemon:all-srcs",
         "//pkg/controller/deployment:all-srcs",
@@ -132,6 +133,7 @@ filegroup(
         "//pkg/controller/volume/events:all-srcs",
         "//pkg/controller/volume/expand:all-srcs",
         "//pkg/controller/volume/persistentvolume:all-srcs",
+        "//pkg/controller/volume/pvcprotection:all-srcs",
     ],
     tags = ["automanaged"],
 )

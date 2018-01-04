@@ -63,8 +63,9 @@ func (g *genClientset) Imports(c *generator.Context) (imports []string) {
 			groupClientPackage := filepath.Join(g.fakeClientsetPackage, "typed", group.PackageName, version.NonEmpty())
 			fakeGroupClientPackage := filepath.Join(groupClientPackage, "fake")
 
-			imports = append(imports, strings.ToLower(fmt.Sprintf("%s%s \"%s\"", group.PackageName, version.NonEmpty(), groupClientPackage)))
-			imports = append(imports, strings.ToLower(fmt.Sprintf("fake%s%s \"%s\"", group.PackageName, version.NonEmpty(), fakeGroupClientPackage)))
+			groupAlias := strings.ToLower(g.groupGoNames[clientgentypes.GroupVersion{group.Group, version.Version}])
+			imports = append(imports, strings.ToLower(fmt.Sprintf("%s%s \"%s\"", groupAlias, version.NonEmpty(), groupClientPackage)))
+			imports = append(imports, strings.ToLower(fmt.Sprintf("fake%s%s \"%s\"", groupAlias, version.NonEmpty(), fakeGroupClientPackage)))
 		}
 	}
 	// the package that has the clientset Interface
@@ -86,18 +87,18 @@ func (g *genClientset) GenerateType(c *generator.Context, t *types.Type, w io.Wr
 	// perhaps we can adapt the go2ild framework to this kind of usage.
 	sw := generator.NewSnippetWriter(w, c, "$", "$")
 
-	allGroups := clientgentypes.ToGroupVersionPackages(g.groups, g.groupGoNames)
+	allGroups := clientgentypes.ToGroupVersionInfo(g.groups, g.groupGoNames)
 
 	sw.Do(common, nil)
 	sw.Do(checkImpl, nil)
 
 	for _, group := range allGroups {
 		m := map[string]interface{}{
-			"group":       group.Group,
-			"version":     group.Version,
-			"PackageName": group.PackageName,
-			"GroupGoName": group.GroupGoName,
-			"Version":     namer.IC(group.Version.String()),
+			"group":        group.Group,
+			"version":      group.Version,
+			"PackageAlias": group.PackageAlias,
+			"GroupGoName":  group.GroupGoName,
+			"Version":      namer.IC(group.Version.String()),
 		}
 
 		sw.Do(clientsetInterfaceImplTemplate, m)
@@ -150,14 +151,14 @@ var _ clientset.Interface = &Clientset{}
 
 var clientsetInterfaceImplTemplate = `
 // $.GroupGoName$$.Version$ retrieves the $.GroupGoName$$.Version$Client
-func (c *Clientset) $.GroupGoName$$.Version$() $.PackageName$.$.GroupGoName$$.Version$Interface {
-	return &fake$.PackageName$.Fake$.GroupGoName$$.Version${Fake: &c.Fake}
+func (c *Clientset) $.GroupGoName$$.Version$() $.PackageAlias$.$.GroupGoName$$.Version$Interface {
+	return &fake$.PackageAlias$.Fake$.GroupGoName$$.Version${Fake: &c.Fake}
 }
 `
 
 var clientsetInterfaceDefaultVersionImpl = `
 // $.GroupGoName$ retrieves the $.GroupGoName$$.Version$Client
-func (c *Clientset) $.GroupGoName$() $.PackageName$.$.GroupGoName$$.Version$Interface {
-	return &fake$.PackageName$.Fake$.GroupGoName$$.Version${Fake: &c.Fake}
+func (c *Clientset) $.GroupGoName$() $.PackageAlias$.$.GroupGoName$$.Version$Interface {
+	return &fake$.PackageAlias$.Fake$.GroupGoName$$.Version${Fake: &c.Fake}
 }
 `

@@ -104,6 +104,9 @@ func testAdapter(f *framework.Framework, kubeClient clientset.Interface, customM
 	}
 	defer CleanupAdapter()
 
+	_, err = kubeClient.RbacV1().ClusterRoleBindings().Create(HPAPermissions)
+	defer kubeClient.RbacV1().ClusterRoleBindings().Delete("custom-metrics-reader", &metav1.DeleteOptions{})
+
 	// Run application that exports the metric
 	err = createSDExporterPods(f, kubeClient)
 	if err != nil {

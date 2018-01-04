@@ -48,7 +48,6 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/discovery"
 	genericapifilters "k8s.io/apiserver/pkg/endpoints/filters"
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
-	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	genericfilters "k8s.io/apiserver/pkg/server/filters"
 	etcdtesting "k8s.io/apiserver/pkg/storage/etcd/testing"
@@ -93,7 +92,7 @@ func setUp(t *testing.T) (*etcdtesting.EtcdTestServer, Config, *assert.Assertion
 
 	config := NewConfig(codecs)
 	config.PublicAddress = net.ParseIP("192.168.10.4")
-	config.RequestContextMapper = genericapirequest.NewRequestContextMapper()
+	config.RequestContextMapper = apirequest.NewRequestContextMapper()
 	config.LegacyAPIGroupPrefixes = sets.NewString("/api")
 	config.LoopbackClientConfig = &restclient.Config{}
 
@@ -484,7 +483,7 @@ func (p *testGetterStorage) New() runtime.Object {
 	}
 }
 
-func (p *testGetterStorage) Get(ctx genericapirequest.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
+func (p *testGetterStorage) Get(ctx apirequest.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
 	return nil, nil
 }
 
@@ -550,7 +549,15 @@ func TestGracefulShutdown(t *testing.T) {
 		Handler: s.Handler,
 	}
 	stopCh := make(chan struct{})
-	serverPort, err := RunServer(insecureServer, "tcp", 10*time.Second, stopCh)
+
+	ln, err := net.Listen("tcp", insecureServer.Addr)
+	if err != nil {
+		t.Errorf("failed to listen on %v: %v", insecureServer.Addr, err)
+	}
+
+	// get port
+	serverPort := ln.Addr().(*net.TCPAddr).Port
+	err = RunServer(insecureServer, ln, 10*time.Second, stopCh)
 	if err != nil {
 		t.Errorf("RunServer err: %v", err)
 	}

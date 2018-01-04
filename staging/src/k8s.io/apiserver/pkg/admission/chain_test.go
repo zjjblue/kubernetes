@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -46,7 +47,7 @@ func (h *FakeHandler) Validate(a Attributes) (err error) {
 	return fmt.Errorf("Don't validate")
 }
 
-func makeHandler(name string, accept bool, ops ...Operation) Interface {
+func makeHandler(name string, accept bool, ops ...Operation) *FakeHandler {
 	return &FakeHandler{
 		name:     name,
 		admit:    accept,
@@ -56,8 +57,11 @@ func makeHandler(name string, accept bool, ops ...Operation) Interface {
 }
 
 func TestAdmitAndValidate(t *testing.T) {
+	sysns := metav1.NamespaceSystem
+	otherns := "default"
 	tests := []struct {
 		name      string
+		ns        string
 		operation Operation
 		chain     chainAdmissionHandler
 		accept    bool
@@ -65,6 +69,7 @@ func TestAdmitAndValidate(t *testing.T) {
 	}{
 		{
 			name:      "all accept",
+			ns:        sysns,
 			operation: Create,
 			chain: []Interface{
 				makeHandler("a", true, Update, Delete, Create),
@@ -76,6 +81,7 @@ func TestAdmitAndValidate(t *testing.T) {
 		},
 		{
 			name:      "ignore handler",
+			ns:        otherns,
 			operation: Create,
 			chain: []Interface{
 				makeHandler("a", true, Update, Delete, Create),
@@ -87,6 +93,7 @@ func TestAdmitAndValidate(t *testing.T) {
 		},
 		{
 			name:      "ignore all",
+			ns:        sysns,
 			operation: Connect,
 			chain: []Interface{
 				makeHandler("a", true, Update, Delete, Create),
@@ -98,6 +105,7 @@ func TestAdmitAndValidate(t *testing.T) {
 		},
 		{
 			name:      "reject one",
+			ns:        otherns,
 			operation: Delete,
 			chain: []Interface{
 				makeHandler("a", true, Update, Delete, Create),
@@ -109,21 +117,22 @@ func TestAdmitAndValidate(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
+		t.Logf("testcase = %s", test.name)
 		// call admit and check that validate was not called at all
-		err := test.chain.Admit(NewAttributesRecord(nil, nil, schema.GroupVersionKind{}, "", "", schema.GroupVersionResource{}, "", test.operation, nil))
+		err := test.chain.Admit(NewAttributesRecord(nil, nil, schema.GroupVersionKind{}, test.ns, "", schema.GroupVersionResource{}, "", test.operation, nil))
 		accepted := (err == nil)
 		if accepted != test.accept {
-			t.Errorf("%s: unexpected result of admit call: %v\n", test.name, accepted)
+			t.Errorf("unexpected result of admit call: %v", accepted)
 		}
 		for _, h := range test.chain {
 			fake := h.(*FakeHandler)
 			_, shouldBeCalled := test.calls[fake.name]
 			if shouldBeCalled != fake.admitCalled {
-				t.Errorf("%s: admit handler %s not called as expected: %v", test.name, fake.name, fake.admitCalled)
+				t.Errorf("admit handler %s not called as expected: %v", fake.name, fake.admitCalled)
 				continue
 			}
 			if fake.validateCalled {
-				t.Errorf("%s: validate handler %s called during admit", test.name, fake.name)
+				t.Errorf("validate handler %s called during admit", fake.name)
 			}
 
 			// reset value for validation test
@@ -131,21 +140,22 @@ func TestAdmitAndValidate(t *testing.T) {
 		}
 
 		// call validate and check that admit was not called at all
-		err = test.chain.Validate(NewAttributesRecord(nil, nil, schema.GroupVersionKind{}, "", "", schema.GroupVersionResource{}, "", test.operation, nil))
+		err = test.chain.Validate(NewAttributesRecord(nil, nil, schema.GroupVersionKind{}, test.ns, "", schema.GroupVersionResource{}, "", test.operation, nil))
 		accepted = (err == nil)
 		if accepted != test.accept {
-			t.Errorf("%s: unexpected result of validate call: %v\n", test.name, accepted)
+			t.Errorf("unexpected result of validate call: %v\n", accepted)
 		}
 		for _, h := range test.chain {
 			fake := h.(*FakeHandler)
+
 			_, shouldBeCalled := test.calls[fake.name]
 			if shouldBeCalled != fake.validateCalled {
-				t.Errorf("%s: validate handler %s not called as expected: %v", test.name, fake.name, fake.validateCalled)
+				t.Errorf("validate handler %s not called as expected: %v", fake.name, fake.validateCalled)
 				continue
 			}
 
 			if fake.admitCalled {
-				t.Errorf("%s: admit handler %s called during admit", test.name, fake.name)
+				t.Errorf("mutating handler unexpectedly called: %s", fake.name)
 			}
 		}
 	}

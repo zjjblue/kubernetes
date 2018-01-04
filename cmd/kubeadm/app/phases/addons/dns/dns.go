@@ -18,10 +18,9 @@ package dns
 
 import (
 	"fmt"
-	"net"
 	"runtime"
 
-	apps "k8s.io/api/apps/v1beta2"
+	apps "k8s.io/api/apps/v1"
 	"k8s.io/api/core/v1"
 	rbac "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -59,29 +58,31 @@ func kubeDNSAddon(cfg *kubeadmapi.MasterConfiguration, client clientset.Interfac
 		return err
 	}
 
-	dnsip, err := getDNSIP(client)
+	dnsip, err := kubeadmconstants.GetDNSIP(cfg.Networking.ServiceSubnet)
 	if err != nil {
 		return err
 	}
 
-	var dnsBindAddr string
+	var dnsBindAddr, dnsProbeAddr string
 	if dnsip.To4() == nil {
 		dnsBindAddr = "::1"
+		dnsProbeAddr = "[" + dnsBindAddr + "]"
 	} else {
 		dnsBindAddr = "127.0.0.1"
+		dnsProbeAddr = dnsBindAddr
 	}
 
 	// Get the YAML manifest conditionally based on the k8s version
 	kubeDNSDeploymentBytes := GetKubeDNSManifest(k8sVersion)
 	dnsDeploymentBytes, err := kubeadmutil.ParseTemplate(kubeDNSDeploymentBytes,
-		struct{ ImageRepository, Arch, Version, DNSBindAddr, DNSDomain, DNSProbeType, MasterTaintKey string }{
+		struct{ ImageRepository, Arch, Version, DNSBindAddr, DNSProbeAddr, DNSDomain, MasterTaintKey string }{
 			ImageRepository: cfg.ImageRepository,
 			Arch:            runtime.GOARCH,
 			// Get the kube-dns version conditionally based on the k8s version
 			Version:        GetDNSVersion(k8sVersion, kubeadmconstants.KubeDNS),
 			DNSBindAddr:    dnsBindAddr,
+			DNSProbeAddr:   dnsProbeAddr,
 			DNSDomain:      cfg.Networking.DNSDomain,
-			DNSProbeType:   GetKubeDNSProbeType(k8sVersion),
 			MasterTaintKey: kubeadmconstants.LabelNodeRoleMaster,
 		})
 	if err != nil {
@@ -148,7 +149,7 @@ func coreDNSAddon(cfg *kubeadmapi.MasterConfiguration, client clientset.Interfac
 		return fmt.Errorf("error when parsing CoreDNS configMap template: %v", err)
 	}
 
-	dnsip, err := getDNSIP(client)
+	dnsip, err := kubeadmconstants.GetDNSIP(cfg.Networking.ServiceSubnet)
 	if err != nil {
 		return err
 	}
@@ -201,7 +202,7 @@ func createCoreDNSAddon(deploymentBytes, serviceBytes, configBytes []byte, clien
 
 	coreDNSServiceAccount := &v1.ServiceAccount{}
 	if err := kuberuntime.DecodeInto(legacyscheme.Codecs.UniversalDecoder(), []byte(CoreDNSServiceAccount), coreDNSServiceAccount); err != nil {
-		return fmt.Errorf("unable to decode CoreDNS configmap %v", err)
+		return fmt.Errorf("unable to decode CoreDNS serviceaccount %v", err)
 	}
 
 	// Create the ConfigMap for CoreDNS or update it in case it already exists
@@ -242,23 +243,4 @@ func createDNSService(dnsService *v1.Service, serviceBytes []byte, client client
 		}
 	}
 	return nil
-}
-
-// getDNSIP fetches the kubernetes service's ClusterIP and appends a "0" to it in order to get the DNS IP
-func getDNSIP(client clientset.Interface) (net.IP, error) {
-	k8ssvc, err := client.CoreV1().Services(metav1.NamespaceDefault).Get("kubernetes", metav1.GetOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("couldn't fetch information about the kubernetes service: %v", err)
-	}
-
-	if len(k8ssvc.Spec.ClusterIP) == 0 {
-		return nil, fmt.Errorf("couldn't fetch a valid clusterIP from the kubernetes service")
-	}
-
-	// Build an IP by taking the kubernetes service's clusterIP and appending a "0" and checking that it's valid
-	dnsIP := net.ParseIP(fmt.Sprintf("%s0", k8ssvc.Spec.ClusterIP))
-	if dnsIP == nil {
-		return nil, fmt.Errorf("could not parse dns ip %q: %v", dnsIP, err)
-	}
-	return dnsIP, nil
 }

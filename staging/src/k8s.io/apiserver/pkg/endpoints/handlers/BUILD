@@ -12,8 +12,8 @@ go_test(
         "namer_test.go",
         "rest_test.go",
     ],
+    embed = [":go_default_library"],
     importpath = "k8s.io/apiserver/pkg/endpoints/handlers",
-    library = ":go_default_library",
     deps = [
         "//vendor/github.com/evanphx/json-patch:go_default_library",
         "//vendor/k8s.io/api/core/v1:go_default_library",
@@ -60,7 +60,6 @@ go_library(
         "//vendor/k8s.io/apimachinery/pkg/apis/meta/internalversion:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1alpha1:go_default_library",
-        "//vendor/k8s.io/apimachinery/pkg/conversion/unstructured:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/fields:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/runtime:go_default_library",
         "//vendor/k8s.io/apimachinery/pkg/runtime/schema:go_default_library",

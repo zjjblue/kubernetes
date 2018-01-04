@@ -1,5 +1,5 @@
 /*
-Copyright 2017 The Kubernetes Authors.
+Copyright 2018 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@ type SecondExampleV1Interface interface {
 	TestTypesGetter
 }
 
-// SecondExampleV1Client is used to interact with features provided by the example.test2.crd.code-generator.k8s.io group.
+// SecondExampleV1Client is used to interact with features provided by the example.test.crd.code-generator.k8s.io group.
 type SecondExampleV1Client struct {
 	restClient rest.Interface
 }

@@ -1,5 +1,5 @@
 /*
-Copyright 2017 The Kubernetes Authors.
+Copyright 2018 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ package externalversions
 
 import (
 	"fmt"
+
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	cache "k8s.io/client-go/tools/cache"
 	v1 "k8s.io/code-generator/_examples/crd/apis/example/v1"
@@ -56,7 +57,7 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 	case v1.SchemeGroupVersion.WithResource("testtypes"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Example().V1().TestTypes().Informer()}, nil
 
-		// Group=example.test2.crd.code-generator.k8s.io, Version=v1
+		// Group=example.test.crd.code-generator.k8s.io, Version=v1
 	case example2_v1.SchemeGroupVersion.WithResource("testtypes"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.SecondExample().V1().TestTypes().Informer()}, nil
 

@@ -33,7 +33,6 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
-	goruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -154,10 +153,6 @@ const (
 	// How long claims have to become dynamically provisioned
 	ClaimProvisionTimeout = 5 * time.Minute
 
-	// When these values are updated, also update cmd/kubelet/app/options/options.go
-	currentPodInfraContainerImageName    = "gcr.io/google_containers/pause"
-	currentPodInfraContainerImageVersion = "3.0"
-
 	// How long a node is allowed to become "Ready" after it is restarted before
 	// the test is considered failed.
 	RestartNodeReadyAgainTimeout = 5 * time.Minute
@@ -230,13 +225,13 @@ func GetServerArchitecture(c clientset.Interface) string {
 
 // GetPauseImageName fetches the pause image name for the same architecture as the apiserver.
 func GetPauseImageName(c clientset.Interface) string {
-	return currentPodInfraContainerImageName + "-" + GetServerArchitecture(c) + ":" + currentPodInfraContainerImageVersion
+	return imageutils.GetE2EImageWithArch(imageutils.Pause, GetServerArchitecture(c))
 }
 
 // GetPauseImageNameForHostArch fetches the pause image name for the same architecture the test is running on.
 // TODO: move this function to the test/utils
 func GetPauseImageNameForHostArch() string {
-	return currentPodInfraContainerImageName + "-" + goruntime.GOARCH + ":" + currentPodInfraContainerImageVersion
+	return imageutils.GetE2EImage(imageutils.Pause)
 }
 
 func GetServicesProxyRequest(c clientset.Interface, request *restclient.Request) (*restclient.Request, error) {
@@ -593,6 +588,7 @@ func WaitForPodsRunningReady(c clientset.Interface, ns string, minPods, allowedN
 	var ignoreNotReady bool
 	badPods := []v1.Pod{}
 	desiredPods := 0
+	notReady := int32(0)
 
 	if wait.PollImmediate(Poll, timeout, func() (bool, error) {
 		// We get the new list of pods, replication controllers, and
@@ -636,7 +632,7 @@ func WaitForPodsRunningReady(c clientset.Interface, ns string, minPods, allowedN
 			return false, err
 		}
 		nOk := int32(0)
-		notReady := int32(0)
+		notReady = int32(0)
 		badPods = []v1.Pod{}
 		desiredPods = len(podList.Items)
 		for _, pod := range podList.Items {
@@ -679,7 +675,7 @@ func WaitForPodsRunningReady(c clientset.Interface, ns string, minPods, allowedN
 		if !ignoreNotReady {
 			return errors.New(errorBadPodsStates(badPods, desiredPods, ns, "RUNNING and READY", timeout))
 		}
-		Logf("Number of not-ready pods is allowed.")
+		Logf("Number of not-ready pods (%d) is below the allowed threshold (%d).", notReady, allowedNotReadyPods)
 	}
 	return nil
 }
@@ -1165,12 +1161,14 @@ func hasRemainingContent(c clientset.Interface, clientPool dynamic.ClientPool, n
 	}
 
 	// find out what content is supported on the server
-	resources, err := c.Discovery().ServerPreferredNamespacedResources()
-	if err != nil && !isDynamicDiscoveryError(err) {
+	// Since extension apiserver is not always available, e.g. metrics server sometimes goes down,
+	// add retry here.
+	resources, err := waitForServerPreferredNamespacedResources(c.Discovery(), 30*time.Second)
+	if err != nil {
 		return false, err
 	}
 	groupVersionResources, err := discovery.GroupVersionResources(resources)
-	if err != nil && !isDynamicDiscoveryError(err) {
+	if err != nil {
 		return false, err
 	}
 
@@ -2127,8 +2125,8 @@ func (b kubectlBuilder) Exec() (string, error) {
 		if err != nil {
 			var rc int = 127
 			if ee, ok := err.(*exec.ExitError); ok {
-				Logf("rc: %d", rc)
 				rc = int(ee.Sys().(syscall.WaitStatus).ExitStatus())
+				Logf("rc: %d", rc)
 			}
 			return "", uexec.CodeExitError{
 				Err:  fmt.Errorf("error running %v:\nCommand stdout:\n%v\nstderr:\n%v\nerror:\n%v\n", cmd, cmd.Stdout, cmd.Stderr, err),
@@ -2727,6 +2725,19 @@ func WaitForControlledPodsRunning(c clientset.Interface, ns, name string, kind s
 		return fmt.Errorf("Error while waiting for replication controller %s pods to be running: %v", name, err)
 	}
 	return nil
+}
+
+// Wait up to PodListTimeout for getting pods of the specified controller name and return them.
+func WaitForControlledPods(c clientset.Interface, ns, name string, kind schema.GroupKind) (pods *v1.PodList, err error) {
+	rtObject, err := getRuntimeObjectForKind(c, kind, ns, name)
+	if err != nil {
+		return nil, err
+	}
+	selector, err := getSelectorFromRuntimeObject(rtObject)
+	if err != nil {
+		return nil, err
+	}
+	return WaitForPodsWithLabel(c, ns, selector)
 }
 
 // Returns true if all the specified pods are scheduled, else returns false.
@@ -4324,7 +4335,7 @@ func ensureGCELoadBalancerResourcesDeleted(ip, portRange string) error {
 	}
 
 	return wait.Poll(10*time.Second, 5*time.Minute, func() (bool, error) {
-		service := gceCloud.GetComputeService()
+		service := gceCloud.ComputeServices().GA
 		list, err := service.ForwardingRules.List(project, region).Do()
 		if err != nil {
 			return false, err
@@ -4483,7 +4494,7 @@ func LaunchWebserverPod(f *Framework, podName, nodeName string) (ip string) {
 	ExpectNoError(f.WaitForPodRunning(podName))
 	createdPod, err := podClient.Get(podName, metav1.GetOptions{})
 	ExpectNoError(err)
-	ip = fmt.Sprintf("%s:%d", createdPod.Status.PodIP, port)
+	ip = net.JoinHostPort(createdPod.Status.PodIP, strconv.Itoa(port))
 	Logf("Target pod IP:port is %s", ip)
 	return
 }
@@ -4560,11 +4571,17 @@ func CoreDump(dir string) {
 		Logf("Dumping logs locally to: %s", dir)
 		cmd = exec.Command(path.Join(TestContext.RepoRoot, "cluster", "log-dump", "log-dump.sh"), dir)
 	}
+	cmd.Env = append(os.Environ(), fmt.Sprintf("LOG_DUMP_SYSTEMD_SERVICES=%s", parseSystemdServices(TestContext.SystemdServices)))
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		Logf("Error running cluster/log-dump/log-dump.sh: %v", err)
 	}
+}
+
+// parseSystemdServices converts services separator from comma to space.
+func parseSystemdServices(services string) string {
+	return strings.TrimSpace(strings.Replace(services, ",", " ", -1))
 }
 
 func UpdatePodWithRetries(client clientset.Interface, ns, name string, update func(*v1.Pod)) (*v1.Pod, error) {
@@ -5080,4 +5097,26 @@ func DsFromManifest(url string) (*extensions.DaemonSet, error) {
 		return nil, fmt.Errorf("failed to decode DaemonSet spec: %v", err)
 	}
 	return &controller, nil
+}
+
+// waitForServerPreferredNamespacedResources waits until server preferred namespaced resources could be successfully discovered.
+// TODO: Fix https://github.com/kubernetes/kubernetes/issues/55768 and remove the following retry.
+func waitForServerPreferredNamespacedResources(d discovery.DiscoveryInterface, timeout time.Duration) ([]*metav1.APIResourceList, error) {
+	Logf("Waiting up to %v for server preferred namespaced resources to be successfully discovered", timeout)
+	var resources []*metav1.APIResourceList
+	if err := wait.PollImmediate(Poll, timeout, func() (bool, error) {
+		var err error
+		resources, err = d.ServerPreferredNamespacedResources()
+		if err == nil || isDynamicDiscoveryError(err) {
+			return true, nil
+		}
+		if !discovery.IsGroupDiscoveryFailedError(err) {
+			return false, err
+		}
+		Logf("Error discoverying server preferred namespaced resources: %v, retrying in %v.", err, Poll)
+		return false, nil
+	}); err != nil {
+		return nil, err
+	}
+	return resources, nil
 }
